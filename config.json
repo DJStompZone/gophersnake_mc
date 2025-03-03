@@ -2,7 +2,7 @@
     "minecraft_server": {
         "address": "71.200.5.30",
         "port": 19132,
-        "online_mode": false,
+        "online_mode": true,
         "game_version": "1.21.62"
     },
     "websocket": {
@@ -12,5 +12,8 @@
     "player": {
         "display_name": "GopherSnake",
         "device_id": "auto-generated"
+    },
+    "msa_auth": {
+        "client_id": "your-client-id"
     }
 }

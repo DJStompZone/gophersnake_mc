@@ -6,7 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	
+
 	"github.com/google/uuid"
 )
 
@@ -18,16 +18,23 @@ type Config struct {
 		OnlineMode  bool   `json:"online_mode"`
 		GameVersion string `json:"game_version"`
 	} `json:"minecraft_server"`
-	
+
 	WebSocket struct {
 		Address string `json:"address"`
 		Port    int    `json:"port"`
 	} `json:"websocket"`
-	
+
 	Player struct {
 		DisplayName string `json:"display_name"`
 		DeviceID    string `json:"device_id"`
 	} `json:"player"`
+
+	MSAAuth struct {
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+		RefreshToken string `json:"refresh_token"`
+		TenantID     string `json:"tenant_id"`
+	} `json:"msa_auth"`
 }
 
 var config Config
@@ -40,13 +47,18 @@ func LoadConfig() error {
 	config.MinecraftServer.Port = 19132
 	config.MinecraftServer.OnlineMode = false
 	config.MinecraftServer.GameVersion = "1.21.62"
-	
+
 	config.WebSocket.Address = "0.0.0.0"
 	config.WebSocket.Port = 8080
-	
+
 	config.Player.DisplayName = "GopherSnake"
 	config.Player.DeviceID = uuid.New().String()
-	
+
+	config.MSAAuth.ClientID = "your-client-id"
+	config.MSAAuth.ClientSecret = "your-client-secret"
+	config.MSAAuth.RefreshToken = "your-refresh-token"
+	config.MSAAuth.TenantID = "your-tenant-id"
+
 	// Check if config file exists
 	if _, err := os.Stat("config.json"); os.IsNotExist(err) {
 		// Create default config file
@@ -54,27 +66,27 @@ func LoadConfig() error {
 		if err != nil {
 			return err
 		}
-		
+
 		err = ioutil.WriteFile("config.json", configData, 0644)
 		if err != nil {
 			return err
 		}
-		
+
 		log.Println("Created default configuration file: config.json")
 		return nil
 	}
-	
+
 	// Read existing config file
 	configData, err := ioutil.ReadFile("config.json")
 	if err != nil {
 		return err
 	}
-	
+
 	err = json.Unmarshal(configData, &config)
 	if err != nil {
 		return err
 	}
-	
+
 	log.Println("Loaded configuration from config.json")
 	return nil
 }
