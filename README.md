@@ -34,7 +34,7 @@ This allows you to:
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/yourusername/gophersnake_mc.git
+   git clone https://github.com/DJStompZone/gophersnake_mc.git
    cd gophersnake_mc
    ```
 
