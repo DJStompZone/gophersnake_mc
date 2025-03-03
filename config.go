@@ -39,7 +39,7 @@ func LoadConfig() error {
 	config.MinecraftServer.Address = "localhost"
 	config.MinecraftServer.Port = 19132
 	config.MinecraftServer.OnlineMode = false
-	config.MinecraftServer.GameVersion = "1.20.0"
+	config.MinecraftServer.GameVersion = "1.21.62"
 	
 	config.WebSocket.Address = "0.0.0.0"
 	config.WebSocket.Port = 8080
