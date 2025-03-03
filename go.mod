@@ -1,4 +1,4 @@
-module github.com/yourusername/gophersnake_mc
+module github.com/djstompzone/gophersnake_mc
 
 go 1.18
 
