@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 
@@ -54,8 +53,7 @@ func LoadConfig() error {
 	config.Player.DisplayName = "GopherSnake"
 	config.Player.DeviceID = uuid.New().String()
 
-	config.MSAAuth.ClientID = "your-client-id"
-	config.MSAAuth.ClientSecret = "your-client-secret"
+	config.MSAAuth.ClientID = "93819583-abf7-4a5e-8b53-9526cf7e7ba9"
 	config.MSAAuth.RefreshToken = "your-refresh-token"
 	config.MSAAuth.TenantID = "your-tenant-id"
 
@@ -67,7 +65,7 @@ func LoadConfig() error {
 			return err
 		}
 
-		err = ioutil.WriteFile("config.json", configData, 0644)
+		err = os.WriteFile("config.json", configData, 0644)
 		if err != nil {
 			return err
 		}
@@ -77,7 +75,7 @@ func LoadConfig() error {
 	}
 
 	// Read existing config file
-	configData, err := ioutil.ReadFile("config.json")
+	configData, err := os.ReadFile("config.json")
 	if err != nil {
 		return err
 	}
