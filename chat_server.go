@@ -2,20 +2,18 @@
 package main
 
 import (
-	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
-	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/device"
 )
 
 var (
@@ -104,9 +102,10 @@ func broadcastToWebsocket(msg Message) {
 func connectMinecraft() {
 	// Create a dialer to connect to a Minecraft server
 	dialer := minecraft.Dialer{
-		ClientData: protocol.ClientData{
-			GameVersion:       "1.21.62",             // Update this to match your server version
-			DeviceOS:          device.DeviceOS(1),   // Windows (DeviceOS 1)
+		// Fixed ClientData usage
+		ClientData: minecraft.ClientData{
+			GameVersion:       "1.21.62",            // Update this to match your server version
+			DeviceOS:          1,                    // Windows (1)
 			DeviceID:          uuid.New().String(),  // Generate a unique device ID
 			DeviceModel:       "gophersnake_client", // Custom device model name
 			ThirdPartyName:    "gophersnake",        // Display name in-game
@@ -246,7 +245,9 @@ func sendChatToMinecraft(message string, target string) {
 		// Add target for whispers
 		if target != "" && target != "all" {
 			textPacket.TextType = packet.TextTypeWhisper
-			textPacket.TargetName = target
+			// Fix: TextPacket doesn't have TargetName field in newer gophertunnel
+			// Add the target to the Parameters instead
+			textPacket.Parameters = append(textPacket.Parameters, target)
 		}
 		
 		err = minecraftConn.WritePacket(textPacket)

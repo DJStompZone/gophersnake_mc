@@ -1,0 +1,6 @@
+config.json
+.pytest_cache/
+__pycache__/
+*.py[cdio]
+vendor/
+node_modules/
