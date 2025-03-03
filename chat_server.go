@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -93,7 +95,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 func broadcastToWebsocket(msg Message) {
 	clientsMux.Lock()
 	defer clientsMux.Unlock()
-	
+
 	for client := range clients {
 		err := client.WriteJSON(msg)
 		if err != nil {
@@ -105,30 +107,57 @@ func broadcastToWebsocket(msg Message) {
 }
 
 func connectMinecraft() {
-    // Get server address from config if available
-    serverAddr := GetMinecraftServerAddress()
-    
-    // Use an empty dialer; let gophertunnel use its defaults.
-    dialer := minecraft.Dialer{}
-    
-    log.Printf("Connecting to Minecraft server at %s...", serverAddr)
-    
-    conn, err := dialer.Dial("raknet", serverAddr)
-    if err != nil {
-        log.Printf("Error connecting to Minecraft: %v", err)
-        log.Println("Will retry connection in 10 seconds...")
-        
-        // Try to reconnect after a delay
-        time.Sleep(10 * time.Second)
-        connectMinecraft()
-        return
-    }
-    
-    minecraftConn = conn
-    log.Println("Connected to Minecraft server successfully!")
-    
-    // Handle incoming Minecraft packets
-    go handleMinecraftConnection(conn)
+	serverAddr := GetMinecraftServerAddress()
+
+	dialer := minecraft.Dialer{
+		ClientData: login.ClientData{
+			GameVersion: GetGameVersion(),
+			DeviceOS:    protocol.DeviceAndroid,
+		},
+		Protocol: minecraft.DefaultProtocol,
+	}
+
+	// NEW: Set PacketFunc for extra diagnostics.
+	dialer.PacketFunc = func(header packet.Header, data []byte, src, dst net.Addr) {
+		log.Printf("Received packet: Header=%+v, DataLength=%d, Src=%v, Dst=%v", header, len(data), src, dst)
+	}
+
+	log.Printf("Connecting to Minecraft server at %s...", serverAddr)
+
+	conn, err := dialer.Dial("raknet", serverAddr)
+	if err != nil {
+		log.Printf("Error connecting to Minecraft: %v", err)
+		logMinecraftErrorDiagnostics(err)
+		log.Println("Will retry connection in 10 seconds...")
+
+		// Try to reconnect after a delay
+		time.Sleep(10 * time.Second)
+		connectMinecraft()
+		return
+	}
+
+	minecraftConn = conn
+	log.Println("Connected to Minecraft server successfully!")
+
+	// Handle incoming Minecraft packets
+	go handleMinecraftConnection(conn)
+}
+
+func logMinecraftErrorDiagnostics(err error) {
+	// Log the error in more detail.
+	log.Printf("Diagnostic details: %v", err)
+
+	// Log game version from configuration.
+	version := GetGameVersion()
+	log.Printf("Configured game version: %s", version)
+
+	// If the error message contains known markers, print additional hints.
+	if strings.Contains(err.Error(), "client outdated") {
+		log.Println("Hint: The server reports the client as outdated. Check if the game version matches.")
+	}
+
+	// If possible, output a formatted error (if err implements fmt.Formatter)
+	log.Printf("Full error: %+v", err)
 }
 
 func handleMinecraftConnection(conn *minecraft.Conn) {
@@ -136,12 +165,12 @@ func handleMinecraftConnection(conn *minecraft.Conn) {
 		conn.Close()
 		minecraftConn = nil
 		log.Println("Minecraft connection closed, attempting to reconnect...")
-		
+
 		// Try to reconnect after a delay
 		time.Sleep(5 * time.Second)
 		connectMinecraft()
 	}()
-	
+
 	for {
 		// Read the next packet from the connection
 		pk, err := conn.ReadPacket()
@@ -194,7 +223,7 @@ func sendChatToMinecraft(message string, target string) {
 
 	// Different approach for sending messages on a dedicated server
 	// For dedicated servers, we typically send commands rather than text packets
-	
+
 	var commandStr string
 	if target != "" && target != "all" {
 		// Send as a whisper using /tell command
@@ -203,13 +232,13 @@ func sendChatToMinecraft(message string, target string) {
 		// Send as regular chat (on dedicated servers, this is often a /say command)
 		// But we can also try with just the message for player chat
 		commandStr = message
-		
+
 		// Alternative: use /say for broadcasts
 		// commandStr = fmt.Sprintf("/say %s", message)
 	}
-	
+
 	log.Printf("Sending to Minecraft: %s", commandStr)
-	
+
 	// Create a command request packet
 	cmdPacket := &packet.CommandRequest{
 		CommandLine: commandStr,
@@ -219,21 +248,21 @@ func sendChatToMinecraft(message string, target string) {
 			RequestID: strings.ReplaceAll(uuid.New().String(), "-", ""),
 		},
 	}
-	
+
 	// Try sending as a command first
 	err := minecraftConn.WritePacket(cmdPacket)
 	if err != nil {
 		log.Printf("Error sending command: %v", err)
-		
+
 		// Fall back to text packet if command fails
 		textPacket := &packet.Text{
-			TextType:     packet.TextTypeChat,
+			TextType:         packet.TextTypeChat,
 			NeedsTranslation: false,
-			SourceName:   "gophersnake",
-			Message:      message,
-			Parameters:   []string{},
+			SourceName:       "gophersnake",
+			Message:          message,
+			Parameters:       []string{},
 		}
-		
+
 		// Add target for whispers
 		if target != "" && target != "all" {
 			textPacket.TextType = packet.TextTypeWhisper
@@ -241,7 +270,7 @@ func sendChatToMinecraft(message string, target string) {
 			// Add the target to the Parameters instead
 			textPacket.Parameters = append(textPacket.Parameters, target)
 		}
-		
+
 		err = minecraftConn.WritePacket(textPacket)
 		if err != nil {
 			log.Printf("Error sending text packet: %v", err)

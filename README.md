@@ -54,13 +54,13 @@ This allows you to:
 
 Edit `config.json` to match your setup:
 
-```json
+```jsonc
 {
     "minecraft_server": {
         "address": "localhost",  // Your Bedrock server address
         "port": 19132,           // Your Bedrock server port (default: 19132)
         "online_mode": false,    // Set to true for Microsoft account authentication
-        "game_version": "1.20.0" // Match your server version
+        "game_version": "1.21.62" // Match your server version
     },
     "websocket": {
         "address": "0.0.0.0",    // WebSocket listen address (0.0.0.0 for all interfaces)
