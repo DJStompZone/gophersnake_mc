@@ -37,7 +37,7 @@ func CheckDialerStructure() {
 	dialer := minecraft.Dialer{}
 	log.Println("Dialer struct fields:")
 	PrintStructFields(dialer, 1)
-	fmt.Println("==== END DIAGNOSTICS ====\n")
+	fmt.Println("==== END DIAGNOSTICS ====")
 }
 
 func RunDialerCheck() {
