@@ -12,8 +12,5 @@
     "player": {
         "display_name": "GopherSnake",
         "device_id": "auto-generated"
-    },
-    "msa_auth": {
-        "client_id": "your-client-id"
     }
 }
