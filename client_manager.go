@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
 )
