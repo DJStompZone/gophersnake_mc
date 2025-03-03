@@ -109,12 +109,22 @@ func broadcastToWebsocket(msg Message) {
 func connectMinecraft() {
 	serverAddr := GetMinecraftServerAddress()
 
+	// Use device code flow for MSA authentication with a public client ID
+	minecraftChain, _, err := AuthenticateWithDeviceCode(config.MSAAuth.ClientID)
+	if err != nil {
+		log.Printf("Error during authentication: %v", err)
+		return
+	}
+
 	dialer := minecraft.Dialer{
 		ClientData: login.ClientData{
 			GameVersion: GetGameVersion(),
 			DeviceOS:    protocol.DeviceAndroid,
 		},
 		Protocol: minecraft.DefaultProtocol,
+		IdentityData: login.IdentityData{
+			Identity: minecraftChain,
+		},
 	}
 
 	// NEW: Set PacketFunc for extra diagnostics.
