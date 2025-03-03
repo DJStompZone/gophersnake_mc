@@ -110,7 +110,8 @@ func connectMinecraft() {
 	serverAddr := GetMinecraftServerAddress()
 
 	// Use device code flow for MSA authentication with a public client ID
-	minecraftChain, err := AuthenticateWithDeviceCode(config.MSAAuth.ClientID)
+	minecraftChain,
+		_, err := AuthenticateWithDeviceCode(config.MSAAuth.ClientID)
 	if err != nil {
 		log.Printf("Error during authentication: %v", err)
 		return
