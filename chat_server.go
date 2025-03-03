@@ -36,6 +36,10 @@ type Message struct {
 }
 
 func main() {
+	// Call setup function from main.go if it exists
+	// Otherwise, comment out this line
+	setup()
+
 	// Start the Minecraft connection manager
 	go connectMinecraft()
 
@@ -43,8 +47,9 @@ func main() {
 	http.HandleFunc("/chat", handleConnections)
 
 	// Start HTTP server
-	log.Println("Starting WebSocket server on :8080")
-	err := http.ListenAndServe(":8080", nil)
+	serverAddr := GetWebSocketAddress() // Use configuration if available, otherwise use default
+	log.Printf("Starting WebSocket server on %s", serverAddr)
+	err := http.ListenAndServe(serverAddr, nil)
 	if err != nil {
 		log.Fatal("Error starting HTTP server:", err)
 	}
@@ -100,43 +105,30 @@ func broadcastToWebsocket(msg Message) {
 }
 
 func connectMinecraft() {
-	// Create a dialer to connect to a Minecraft server
-	dialer := minecraft.Dialer{
-		// Fixed ClientData usage
-		ClientData: minecraft.ClientData{
-			GameVersion:       "1.21.62",            // Update this to match your server version
-			DeviceOS:          1,                    // Windows (1)
-			DeviceID:          uuid.New().String(),  // Generate a unique device ID
-			DeviceModel:       "gophersnake_client", // Custom device model name
-			ThirdPartyName:    "gophersnake",        // Display name in-game
-			IdentityPublicKey: "gophersnake",        // Required for newer versions
-			SkinID:            uuid.New().String(),  // Random skin ID
-			LanguageCode:      "en_US",              // Language setting
-		},
-		// For offline mode servers, we don't need to set a TokenSource
-	}
-
-	// Connect to the Minecraft server
-	// Replace with your server address (standard port is 19132)
-	serverAddr := "localhost:19132"
-	log.Printf("Connecting to Minecraft server at %s...", serverAddr)
-	
-	conn, err := dialer.Dial("raknet", serverAddr)
-	if err != nil {
-		log.Printf("Error connecting to Minecraft: %v", err)
-		log.Println("Will retry connection in 10 seconds...")
-		
-		// Try to reconnect after a delay
-		time.Sleep(10 * time.Second)
-		connectMinecraft()
-		return
-	}
-
-	minecraftConn = conn
-	log.Println("Connected to Minecraft server successfully!")
-
-	// Handle incoming Minecraft packets
-	go handleMinecraftConnection(conn)
+    // Get server address from config if available
+    serverAddr := GetMinecraftServerAddress()
+    
+    // Use an empty dialer; let gophertunnel use its defaults.
+    dialer := minecraft.Dialer{}
+    
+    log.Printf("Connecting to Minecraft server at %s...", serverAddr)
+    
+    conn, err := dialer.Dial("raknet", serverAddr)
+    if err != nil {
+        log.Printf("Error connecting to Minecraft: %v", err)
+        log.Println("Will retry connection in 10 seconds...")
+        
+        // Try to reconnect after a delay
+        time.Sleep(10 * time.Second)
+        connectMinecraft()
+        return
+    }
+    
+    minecraftConn = conn
+    log.Println("Connected to Minecraft server successfully!")
+    
+    // Handle incoming Minecraft packets
+    go handleMinecraftConnection(conn)
 }
 
 func handleMinecraftConnection(conn *minecraft.Conn) {
