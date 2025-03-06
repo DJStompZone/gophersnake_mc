@@ -28,6 +28,45 @@ This allows you to:
 
 - Python 3.6+
 - [websocket-client](https://pypi.org/project/websocket-client/)
+- For authentication: [msal](https://pypi.org/project/msal/) and [requests](https://pypi.org/project/requests/)
+
+## Authentication
+
+GopherSnake MC uses the Microsoft Xbox Live authentication system for online mode. This requires:
+
+1. A valid Microsoft account with Minecraft purchased
+2. Python with the required packages installed:
+
+```bash
+pip install msal requests
+```
+
+### Authentication Process
+
+The authentication flow uses Microsoft Authentication Library (MSAL) to:
+
+1. Authenticate with Microsoft Account using a device code flow
+2. Exchange the Microsoft token for Xbox Live credentials
+3. Get XSTS tokens necessary for Minecraft authentication
+4. Cache tokens securely to avoid frequent re-authentication
+
+You'll be prompted to visit a Microsoft URL and enter a code when authentication is needed.
+Token caching ensures you won't need to do this every time you run the application.
+
+### Authentication Troubleshooting
+
+If you encounter authentication issues:
+
+1. **Missing Python packages**: Ensure you've installed the required packages:
+   ```bash
+   pip install msal requests
+   ```
+
+2. **Token not being accepted**: Clear the cache by deleting the `xbl3_token_cache.bin` file (location will be shown in logs)
+
+3. **Authentication flow fails**: Ensure you're completing the Microsoft login process within the time window (usually 15 minutes)
+
+4. **Python not found**: Make sure Python is installed and in your PATH. The application tries to detect Python using different names (py, python, python3)
 
 ## Installation
 
@@ -47,7 +86,7 @@ This allows you to:
 3. Install Python dependencies:
 
    ```bash
-   pip install websocket-client
+   pip install websocket-client msal requests
    ```
 
 ## Configuration
@@ -129,7 +168,8 @@ client.send_chat_message("Hello from Python!")
 
 3. **Authentication errors**
    - For online-mode servers, you'll need to set up proper authentication
-   - See the Advanced Configuration section in this README
+   - Make sure you've installed the required Python packages: `pip install msal requests`
+   - If problems persist, see the Authentication Troubleshooting section in this README
 
 ## Project Structure
 

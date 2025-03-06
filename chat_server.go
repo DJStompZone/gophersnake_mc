@@ -49,19 +49,20 @@ func main() {
 	http.HandleFunc("/chat", handleConnections)
 
 	// Start HTTP server
-	serverAddr := GetWebSocketAddress() // Use configuration if available, otherwise use default
-	log.Printf("Starting WebSocket server on %s", serverAddr)
-	err := http.ListenAndServe(serverAddr, nil)
+	addr := GetWebSocketAddress()
+	log.Printf("Starting WebSocket server at %s...", addr)
+	err := http.ListenAndServe(addr, nil)
 	if err != nil {
-		log.Fatal("Error starting HTTP server:", err)
+		log.Fatal("Error starting server:", err)
 	}
 }
 
+// handleConnections handles incoming WebSocket connections
 func handleConnections(w http.ResponseWriter, r *http.Request) {
 	// Upgrade initial GET request to a WebSocket
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("Error upgrading connection: %v", err)
+		log.Printf("Error upgrading to WebSocket: %v", err)
 		return
 	}
 	defer ws.Close()
@@ -69,11 +70,19 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	// Register new client
 	clientsMux.Lock()
 	clients[ws] = true
+	clientCount := len(clients)
 	clientsMux.Unlock()
+	log.Printf("New WebSocket client connected. Total clients: %d", clientCount)
 
-	log.Println("New Python client connected")
+	// Welcome message
+	welcomeMsg := Message{Type: "info", Message: fmt.Sprintf("Welcome! Connected to GopherSnake MC. There are %d client(s) connected.", clientCount)}
+	err = ws.WriteJSON(welcomeMsg)
+	if err != nil {
+		log.Printf("Error sending welcome message: %v", err)
+		return
+	}
 
-	// Handle WebSocket messages
+	// Main message handling loop
 	for {
 		var msg Message
 		err := ws.ReadJSON(&msg)
@@ -85,13 +94,20 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// Process the message
-		if msg.Type == "chat_message" && minecraftConn != nil {
+		// Process the message based on its type
+		switch msg.Type {
+		case "chat":
+			// Forward message to Minecraft
+			log.Printf("Received chat message from WebSocket: %s", msg.Message)
 			sendChatToMinecraft(msg.Message, msg.Target)
+			broadcastToWebsocket(msg)
+		default:
+			log.Printf("Unknown message type: %s", msg.Type)
 		}
 	}
 }
 
+// broadcastToWebsocket sends a message to all connected WebSocket clients
 func broadcastToWebsocket(msg Message) {
 	clientsMux.Lock()
 	defer clientsMux.Unlock()
@@ -106,14 +122,18 @@ func broadcastToWebsocket(msg Message) {
 	}
 }
 
+// connectMinecraft establishes a connection to the Minecraft Bedrock server
 func connectMinecraft() {
 	serverAddr := GetMinecraftServerAddress()
+	log.Printf("Connecting to Minecraft server at %s...", serverAddr)
 
-	// Use device code flow for MSA authentication with a public client ID
-	minecraftChain,
-		_, err := AuthenticateWithDeviceCode(config.MSAAuth.ClientID)
+	// Use Python script for XBL3.0 authentication
+	minecraftChain, privateKey, err := AuthenticateWithPythonXBL3()
 	if err != nil {
 		log.Printf("Error during authentication: %v", err)
+		log.Println("Will retry connection in 10 seconds...")
+		time.Sleep(10 * time.Second)
+		connectMinecraft()
 		return
 	}
 
@@ -121,19 +141,22 @@ func connectMinecraft() {
 		ClientData: login.ClientData{
 			GameVersion: GetGameVersion(),
 			DeviceOS:    protocol.DeviceAndroid,
+			DeviceID:    uuid.NewString(), // Generate a unique device ID
 		},
 		Protocol: minecraft.DefaultProtocol,
 		IdentityData: login.IdentityData{
 			Identity: minecraftChain,
+			XUID:     "", // Will be filled by server
 		},
 	}
 
-	// NEW: Set PacketFunc for extra diagnostics.
+	// Store the private key for future use if needed
+	_ = privateKey
+
+	// Set PacketFunc for extra diagnostics
 	dialer.PacketFunc = func(header packet.Header, data []byte, src, dst net.Addr) {
 		log.Printf("Received packet: Header=%+v, DataLength=%d, Src=%v, Dst=%v", header, len(data), src, dst)
 	}
-
-	log.Printf("Connecting to Minecraft server at %s...", serverAddr)
 
 	conn, err := dialer.Dial("raknet", serverAddr)
 	if err != nil {
@@ -154,6 +177,7 @@ func connectMinecraft() {
 	go handleMinecraftConnection(conn)
 }
 
+// logMinecraftErrorDiagnostics provides detailed diagnostic information for Minecraft connection errors
 func logMinecraftErrorDiagnostics(err error) {
 	// Log the error in more detail.
 	log.Printf("Diagnostic details: %v", err)
@@ -171,19 +195,15 @@ func logMinecraftErrorDiagnostics(err error) {
 	log.Printf("Full error: %+v", err)
 }
 
+// handleMinecraftConnection processes incoming packets from the Minecraft server
 func handleMinecraftConnection(conn *minecraft.Conn) {
 	defer func() {
-		conn.Close()
-		minecraftConn = nil
 		log.Println("Minecraft connection closed, attempting to reconnect...")
-
-		// Try to reconnect after a delay
-		time.Sleep(5 * time.Second)
+		// Try to reconnect
 		connectMinecraft()
 	}()
 
 	for {
-		// Read the next packet from the connection
 		pk, err := conn.ReadPacket()
 		if err != nil {
 			log.Printf("Error reading packet: %v", err)
@@ -193,98 +213,57 @@ func handleMinecraftConnection(conn *minecraft.Conn) {
 		// Handle different packet types
 		switch p := pk.(type) {
 		case *packet.Text:
-			// Process chat messages
 			handleMinecraftChatMessage(p)
-		case *packet.Disconnect:
-			// Server kicked us
-			log.Printf("Disconnected by server: %s", p.Message)
-			return
-		}
-
-		// Forward the packet to maintain the connection
-		if err := conn.WritePacket(pk); err != nil {
-			log.Printf("Error forwarding packet: %v", err)
-			return
+		// Add other packet types as needed
+		default:
+			// Uncomment for verbose packet logging
+			// log.Printf("Received packet of type %T: %+v", pk, pk)
 		}
 	}
 }
 
+// handleMinecraftChatMessage processes incoming chat messages from Minecraft
 func handleMinecraftChatMessage(textPacket *packet.Text) {
-	// Skip system messages and commands
-	if textPacket.TextType != packet.TextTypeChat && textPacket.TextType != packet.TextTypeWhisper {
+	// Filter out system messages if needed
+	if textPacket.TextType != packet.TextTypeChat {
 		return
 	}
 
-	// Create message object
+	// Create message object for WebSocket
 	msg := Message{
-		Type:    "chat_message",
+		Type:    "chat",
 		Message: textPacket.Message,
 		Sender:  textPacket.SourceName,
 	}
 
 	// Broadcast to all WebSocket clients
 	broadcastToWebsocket(msg)
+	log.Printf("[MC] %s: %s", textPacket.SourceName, textPacket.Message)
 }
 
+// sendChatToMinecraft sends a chat message to the Minecraft server
 func sendChatToMinecraft(message string, target string) {
 	if minecraftConn == nil {
-		log.Println("Not connected to Minecraft server")
+		log.Println("Cannot send message: No Minecraft connection")
 		return
 	}
 
-	// Different approach for sending messages on a dedicated server
-	// For dedicated servers, we typically send commands rather than text packets
-
-	var commandStr string
-	if target != "" && target != "all" {
-		// Send as a whisper using /tell command
-		commandStr = fmt.Sprintf("/tell %s %s", target, message)
-	} else {
-		// Send as regular chat (on dedicated servers, this is often a /say command)
-		// But we can also try with just the message for player chat
-		commandStr = message
-
-		// Alternative: use /say for broadcasts
-		// commandStr = fmt.Sprintf("/say %s", message)
+	// Create chat packet
+	textPacket := &packet.Text{
+		TextType:         packet.TextTypeChat,
+		NeedsTranslation: false,
+		SourceName:       config.Player.DisplayName,
+		Message:          message,
 	}
 
-	log.Printf("Sending to Minecraft: %s", commandStr)
-
-	// Create a command request packet
-	cmdPacket := &packet.CommandRequest{
-		CommandLine: commandStr,
-		CommandOrigin: protocol.CommandOrigin{
-			Origin:    protocol.CommandOriginPlayer,
-			UUID:      uuid.New(),
-			RequestID: strings.ReplaceAll(uuid.New().String(), "-", ""),
-		},
+	// Set target if specified
+	if target != "" {
+		textPacket.XUID = target
 	}
 
-	// Try sending as a command first
-	err := minecraftConn.WritePacket(cmdPacket)
+	// Send the packet
+	err := minecraftConn.WritePacket(textPacket)
 	if err != nil {
-		log.Printf("Error sending command: %v", err)
-
-		// Fall back to text packet if command fails
-		textPacket := &packet.Text{
-			TextType:         packet.TextTypeChat,
-			NeedsTranslation: false,
-			SourceName:       "gophersnake",
-			Message:          message,
-			Parameters:       []string{},
-		}
-
-		// Add target for whispers
-		if target != "" && target != "all" {
-			textPacket.TextType = packet.TextTypeWhisper
-			// Fix: TextPacket doesn't have TargetName field in newer gophertunnel
-			// Add the target to the Parameters instead
-			textPacket.Parameters = append(textPacket.Parameters, target)
-		}
-
-		err = minecraftConn.WritePacket(textPacket)
-		if err != nil {
-			log.Printf("Error sending text packet: %v", err)
-		}
+		log.Printf("Error sending chat message to Minecraft: %v", err)
 	}
 }

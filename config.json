@@ -1,0 +1,16 @@
+{
+    "minecraft_server": {
+        "address": "71.200.5.30",
+        "port": 19132,
+        "online_mode": true,
+        "game_version": "1.21.62"
+    },
+    "websocket": {
+        "address": "0.0.0.0",
+        "port": 8080
+    },
+    "player": {
+        "display_name": "GopherSnake",
+        "device_id": "auto-generated"
+    }
+}
