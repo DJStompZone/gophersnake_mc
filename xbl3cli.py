@@ -209,25 +209,40 @@ class XboxLiveAuth:
             return None
         debug_print("Successfully obtained XBL token")
 
-        # Step 3: Get XSTS token
+        # Step 3: Get Minecraft-specific XSTS token (most important for Minecraft authentication)
+        mc_xsts_token = self.get_minecraft_xsts_token(xbl_token)
+        if not mc_xsts_token:
+            debug_print("Failed to get Minecraft-specific XSTS token")
+            # Continue with the fallback option below
+        else:
+            debug_print("Successfully obtained Minecraft-specific XSTS token")
+            # Use the Minecraft-specific token if available
+            uhs = mc_xsts_token["DisplayClaims"]["xui"][0]["uhs"]
+            token = mc_xsts_token["Token"]
+            xbl3_token = f"XBL3.0 x={uhs};{token}"
+            debug_print(f"XBL3.0 token generated successfully (UHS: {uhs}) using Minecraft-specific XSTS token")
+            return xbl3_token
+
+        # Step 4: As a fallback, get the general XSTS token
         xsts_token = self.get_xsts_token(xbl_token)
         if not xsts_token:
             debug_print("Failed to get XSTS token")
             return None
-        debug_print("Successfully obtained XSTS token")
+        debug_print("Successfully obtained general XSTS token")
 
-        # Step 4: Format the final XBL3.0 token
+        # Format the final XBL3.0 token using the general XSTS token
         uhs = xsts_token["DisplayClaims"]["xui"][0]["uhs"]
         token = xsts_token["Token"]
         xbl3_token = f"XBL3.0 x={uhs};{token}"
         
-        debug_print(f"XBL3.0 token generated successfully (UHS: {uhs})")
+        debug_print(f"XBL3.0 token generated successfully (UHS: {uhs}) using general XSTS token")
         return xbl3_token
 
     def get_xbl_token(self, msa_token):
         """Exchange MSA token for Xbox Live token"""
         data = None
         try:
+            # The format of this payload is critical
             payload = {
                 "Properties": {
                     "AuthMethod": "RPS",
@@ -243,13 +258,25 @@ class XboxLiveAuth:
             response = requests.post(
                 self.XBL_AUTH_URL,
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
             )
             
             response.raise_for_status()
             data = response.json()
             debug_print(f"XBL token response format: {list(data.keys())}")
             
+            # Validate the response has the expected fields
+            if "Token" not in data or "DisplayClaims" not in data:
+                debug_print(f"Missing required fields in XBL token response: {data}")
+                return None
+                
+            if "xui" not in data["DisplayClaims"] or not data["DisplayClaims"]["xui"]:
+                debug_print(f"Missing xui claims in XBL token response: {data['DisplayClaims']}")
+                return None
+                
             return data
         except requests.RequestException as e:
             debug_print(f"Request failed during XBL token acquisition: {e}")
@@ -272,7 +299,7 @@ class XboxLiveAuth:
                     "SandboxId": "RETAIL",
                     "UserTokens": [xbl_token["Token"]]
                 },
-                "RelyingParty": "rp://api.minecraftservices.com/",
+                "RelyingParty": "http://xboxlive.com",
                 "TokenType": "JWT"
             }
             
@@ -298,6 +325,53 @@ class XboxLiveAuth:
             return None
         except Exception as e:
             debug_print(f"Unexpected error during XSTS token acquisition: {e}")
+            debug_print(f"Response data: {data}")
+            return None
+
+    def get_minecraft_xsts_token(self, xbl_token):
+        """Exchange Xbox Live token for Minecraft-specific XSTS token"""
+        data = None
+        try:
+            payload = {
+                "Properties": {
+                    "SandboxId": "RETAIL",
+                    "UserTokens": [xbl_token["Token"]]
+                },
+                # This specific URL format is critical for Minecraft authentication
+                "RelyingParty": "rp://api.minecraftservices.com/",
+                "TokenType": "JWT"
+            }
+            
+            debug_print(f"Sending Minecraft XSTS token request with UserTokens length: {len(payload['Properties']['UserTokens'])}")
+            debug_print(f"Using RelyingParty: {payload['RelyingParty']}")
+            
+            response = requests.post(
+                self.XSTS_AUTH_URL,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
+            )
+            
+            response.raise_for_status()
+            data = response.json()
+            debug_print(f"Minecraft XSTS token response format: {list(data.keys())}")
+            
+            if "Token" not in data:
+                debug_print(f"No Token in response. Full response: {data}")
+                return None
+                
+            return data
+        except requests.RequestException as e:
+            debug_print(f"Request failed during Minecraft XSTS token acquisition: {e}")
+            return None
+        except KeyError as e:
+            debug_print(f"Unexpected response format from Minecraft XSTS auth: {e}")
+            debug_print(f"Response data: {data}")
+            return None
+        except Exception as e:
+            debug_print(f"Unexpected error during Minecraft XSTS token acquisition: {e}")
             debug_print(f"Response data: {data}")
             return None
 

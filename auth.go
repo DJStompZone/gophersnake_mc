@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
-	"strings"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 )
@@ -39,20 +38,21 @@ func CheckPythonDependencies() error {
 
 // GetPythonCommand returns the appropriate Python command for the current OS
 func GetPythonCommand() string {
-	return "python.exe"
+
 	// If on Windows, try multiple Python command variants
 	if GetRuntimeOS() == "windows" {
+		return "python.exe"
 		// Try 'py' first (Python launcher), then 'python'
-		cmds := []string{"python", "python3", "py"}
-		for _, cmd := range cmds {
-			if _, err := exec.LookPath(cmd); err == nil {
-				log.Printf("Found Python command: %s", cmd)
-				return cmd
-			}
-		}
+		// cmds := []string{"python", "python3", "py"}
+		// for _, cmd := range cmds {
+		// 	if _, err := exec.LookPath(cmd); err == nil {
+		// 		log.Printf("Found Python command: %s", cmd)
+		// 		return cmd
+		// 	}
+		// }
 		// Default to python if none found
-		log.Printf("Warning: Could not find Python command, defaulting to 'python'")
-		return "python"
+		// log.Printf("Warning: Could not find Python command, defaulting to 'python'")
+		// return "python"
 	}
 
 	// On non-Windows platforms, use python3
@@ -67,155 +67,118 @@ func GetRuntimeOS() string {
 // AuthenticateWithDeviceCode performs device code authentication and returns a Minecraft JWT chain
 // using the built-in gophertunnel auth flow
 func AuthenticateWithDeviceCode(clientID string) (string, *ecdsa.PrivateKey, error) {
+	log.Println("Starting device code authentication via gophertunnel...")
+
+	// Use the built-in TokenSource to get a Live token
+	log.Println("Requesting Microsoft Live token...")
+	ctx := context.Background()
+
 	// Request Live token using device code flow
 	liveToken, err := auth.RequestLiveToken()
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("failed to get Live token: %w", err)
 	}
-
-	// Request XBOX Live token
-	xblToken, err := auth.RequestXBLToken(context.Background(), liveToken, "rp://api.minecraftservices.com/")
-	if err != nil {
-		return "", nil, err
-	}
+	log.Println("Successfully obtained Microsoft Live token")
 
 	// Generate ECDSA private key for encryption
+	log.Println("Generating ECDSA key for Minecraft authentication...")
 	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("failed to generate ECDSA key: %w", err)
+	}
+
+	// Get XBL token with Minecraft relying party
+	log.Println("Requesting XBL token...")
+	xblToken, err := auth.RequestXBLToken(ctx, liveToken, "https://multiplayer.minecraft.net/")
+	if err != nil {
+		log.Printf("Failed with Minecraft relying party: %v", err)
+		log.Println("Falling back to general Xbox Live relying party...")
+
+		// Fall back to general Xbox Live relying party
+		xblToken, err = auth.RequestXBLToken(ctx, liveToken, "http://xboxlive.com")
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to get XBL token: %w", err)
+		}
+	}
+
+	// Log the user hash for debugging
+	if len(xblToken.AuthorizationToken.DisplayClaims.UserInfo) > 0 {
+		userHash := xblToken.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash
+		log.Printf("Successfully obtained XBL token with UHS: %s", userHash)
+	} else {
+		log.Println("Warning: XBL token obtained but missing user hash")
 	}
 
 	// Request Minecraft chain
-	minecraftChain, err := auth.RequestMinecraftChain(context.Background(), xblToken, privateKey)
+	log.Println("Requesting Minecraft authentication chain...")
+	minecraftChain, err := auth.RequestMinecraftChain(ctx, xblToken, privateKey)
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("failed to get Minecraft chain: %w", err)
 	}
+	log.Printf("Successfully obtained Minecraft chain (length: %d characters)", len(minecraftChain))
 
 	return minecraftChain, privateKey, nil
 }
 
-// AuthenticateWithPythonXBL3 performs authentication using the Python XBL3.0 token
-// script and returns a Minecraft JWT chain
-func AuthenticateWithPythonXBL3() (string, *ecdsa.PrivateKey, error) {
-	log.Println("Starting XBL3.0 authentication process using Python script...")
+// AuthenticateWithPythonXBL3 obtains an XBL3.0 token and creates an ECDSA key
+// using the built-in gophertunnel auth functionality
+func AuthenticateWithPythonXBL3() (*auth.XBLToken, *ecdsa.PrivateKey, error) {
+	log.Println("Starting authentication using gophertunnel's built-in auth...")
 
-	// Check Python dependencies first
-	if err := CheckPythonDependencies(); err != nil {
-		log.Printf("Python dependency check failed: %v", err)
-		log.Println("Please install required packages with: pip install msal requests")
-		return "", nil, fmt.Errorf("python dependency check failed: %w", err)
+	// Generate ECDSA key for Minecraft authentication
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate ECDSA key: %w", err)
 	}
 
-	// Get XBL3.0 token from Python script
-	xbl3TokenStr, err := GetXBL3Token()
-	if err != nil {
-		log.Printf("Error getting XBL3.0 token: %v", err)
+	// Use the built-in TokenSource from gophertunnel
+	ctx := context.Background()
 
-		// Check if Python is installed
-		pythonCmd := GetPythonCommand()
-		checkCmd := exec.Command(pythonCmd, "--version")
-		if versionErr := checkCmd.Run(); versionErr != nil {
-			log.Printf("Python not found or not working correctly: %v", versionErr)
-			return "", nil, fmt.Errorf("python not found or not working: %w", versionErr)
+	// Request Live token using device code flow
+	log.Println("Requesting Microsoft Live token...")
+	liveToken, err := auth.RequestLiveToken()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get Live token: %w", err)
+	}
+	log.Println("Successfully obtained Microsoft Live token")
+
+	// Try different relying parties
+	relyingParties := []string{
+		"https://multiplayer.minecraft.net/",
+		"http://xboxlive.com",        // General Xbox Live
+		"https://sisu.xboxlive.com/", // The SISU endpoint itself
+	}
+
+	var xblToken *auth.XBLToken
+	var lastErr error
+
+	for _, rp := range relyingParties {
+		log.Printf("Trying relying party: %s", rp)
+		xblToken, err = auth.RequestXBLToken(ctx, liveToken, rp)
+		if err != nil {
+			log.Printf("Failed with relying party %s: %v", rp, err)
+			lastErr = err
+			continue
 		}
 
-		return "", nil, fmt.Errorf("failed to get XBL3.0 token: %w", err)
+		// Success
+		log.Printf("Successfully obtained XBL token with relying party: %s", rp)
+
+		// Verify we got a valid token with user hash
+		if len(xblToken.AuthorizationToken.DisplayClaims.UserInfo) == 0 {
+			log.Printf("Warning: XBL token with relying party %s is missing user information", rp)
+			lastErr = fmt.Errorf("XBL token missing user information")
+			continue
+		}
+
+		// Valid token found
+		userHash := xblToken.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash
+		log.Printf("Successfully obtained XBL token with UHS: %s", userHash)
+		return xblToken, privateKey, nil
 	}
 
-	if xbl3TokenStr == "" {
-		return "", nil, fmt.Errorf("received empty XBL3.0 token from Python script")
-	}
-
-	// Validate token format
-	if !strings.HasPrefix(xbl3TokenStr, "XBL3.0") {
-		log.Printf("Warning: Unexpected token format: '%s'", xbl3TokenStr)
-		return "", nil, fmt.Errorf("invalid token format: does not start with XBL3.0")
-	}
-
-	// Parse the token into the expected format
-	xblToken, err := parseXBL3TokenToStruct(xbl3TokenStr)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to parse XBL3.0 token: %w", err)
-	}
-
-	// Generate ECDSA private key for encryption
-	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to generate EC private key: %w", err)
-	}
-
-	log.Println("Requesting Minecraft chain using XBL3.0 token...")
-
-	// Request Minecraft chain using the XBL3.0 token
-	minecraftChain, err := auth.RequestMinecraftChain(context.Background(), xblToken, privateKey)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to obtain Minecraft chain: %w", err)
-	}
-
-	log.Println("Successfully obtained Minecraft authentication chain")
-	return minecraftChain, privateKey, nil
+	// All relying parties failed
+	return nil, nil, fmt.Errorf("failed to get XBL token with any relying party: %w", lastErr)
 }
 
-// parseXBL3TokenToStruct parses a XBL3.0 token string into the auth.XBLToken struct
-func parseXBL3TokenToStruct(tokenStr string) (*auth.XBLToken, error) {
-	// Clean and validate input
-	tokenStr = strings.TrimSpace(tokenStr)
-
-	if tokenStr == "" {
-		return nil, fmt.Errorf("empty token string")
-	}
-
-	if !strings.HasPrefix(tokenStr, "XBL3.0") {
-		return nil, fmt.Errorf("invalid token format: missing XBL3.0 prefix")
-	}
-
-	// Remove the "XBL3.0 " prefix
-	tokenStr = strings.TrimPrefix(tokenStr, "XBL3.0 ")
-
-	// Split the "x=<uhs>;<token>" part
-	parts := strings.Split(tokenStr, ";")
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("unexpected XBL3.0 token format: should be 'XBL3.0 x=<uhs>;<token>'")
-	}
-
-	// Extract the UHS (user hash) part
-	uhsPart := parts[0]
-	if !strings.HasPrefix(uhsPart, "x=") {
-		return nil, fmt.Errorf("unexpected UHS format in token: missing 'x=' prefix")
-	}
-
-	uhsPart = strings.TrimPrefix(uhsPart, "x=")
-	if uhsPart == "" {
-		return nil, fmt.Errorf("empty UHS value in token")
-	}
-
-	// Extract the token part
-	xstsToken := parts[1]
-	if xstsToken == "" {
-		return nil, fmt.Errorf("empty XSTS token value")
-	}
-
-	// Create a properly formatted XBLToken struct
-	xblToken := &auth.XBLToken{}
-
-	// Set the token in the expected format
-	xblToken.AuthorizationToken.Token = xstsToken
-
-	// Set the user hash in the expected format
-	userInfo := struct {
-		GamerTag string `json:"gtg"`
-		XUID     string `json:"xid"`
-		UserHash string `json:"uhs"`
-	}{
-		UserHash: uhsPart,
-	}
-
-	xblToken.AuthorizationToken.DisplayClaims.UserInfo = []struct {
-		GamerTag string `json:"gtg"`
-		XUID     string `json:"xid"`
-		UserHash string `json:"uhs"`
-	}{userInfo}
-
-	log.Printf("Successfully parsed XBL3.0 token with UHS: %s", uhsPart)
-	return xblToken, nil
-}
+// startDeviceCodeFlow is not needed anymore - we're using the gophertunnel implementation directly

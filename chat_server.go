@@ -2,20 +2,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/sandertv/gophertunnel/minecraft"
+	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+	"golang.org/x/oauth2"
 )
 
 var (
@@ -124,57 +125,110 @@ func broadcastToWebsocket(msg Message) {
 
 // connectMinecraft establishes a connection to the Minecraft Bedrock server
 func connectMinecraft() {
-	serverAddr := GetMinecraftServerAddress()
-	log.Printf("Connecting to Minecraft server at %s...", serverAddr)
+	for {
+		log.Println("Attempting to connect to Minecraft server...")
 
-	// Use Python script for XBL3.0 authentication
-	minecraftChain, privateKey, err := AuthenticateWithPythonXBL3()
-	if err != nil {
-		log.Printf("Error during authentication: %v", err)
-		log.Println("Will retry connection in 10 seconds...")
-		time.Sleep(10 * time.Second)
-		connectMinecraft()
-		return
+		serverAddr := GetMinecraftServerAddress()
+		if serverAddr == "" {
+			log.Println("Invalid Minecraft server address in config.json")
+			return
+		}
+
+		// Create a dialer for connecting to the Minecraft server
+		dialer := minecraft.Dialer{
+			ClientData: login.ClientData{
+				GameVersion:      GetGameVersion(),
+				DeviceOS:         protocol.DeviceAndroid,
+				DeviceID:         config.Player.DeviceID,
+				DeviceModel:      "GopherSnake MC",
+				DefaultInputMode: 2, // Touch input mode (2)
+				CurrentInputMode: 2, // Touch input mode (2)
+				UIProfile:        0, // Classic UI (0)
+				GUIScale:         0, // Default GUI scale
+				LanguageCode:     "en_US",
+			},
+			IdentityData: login.IdentityData{
+				DisplayName: config.Player.DisplayName,
+			},
+		}
+
+		// Check if online mode is enabled in config
+		if config.MinecraftServer.OnlineMode {
+			log.Println("Online mode enabled, performing authentication...")
+
+			// IMPORTANT: Use the built-in TokenSource directly as intended
+			log.Println("Using gophertunnel's built-in auth.TokenSource for authentication")
+			dialer.TokenSource = auth.TokenSource
+		}
+
+		log.Println("Dialing Minecraft server...")
+
+		// Attempt to dial the Minecraft server
+		conn, err := dialer.Dial("raknet", serverAddr)
+		if err != nil {
+			logMinecraftErrorDiagnostics(err)
+
+			// If the default auth.TokenSource failed, try with our custom implementation
+			if config.MinecraftServer.OnlineMode {
+				log.Println("Default auth failed, trying custom authentication...")
+
+				xblToken, key, err := AuthenticateWithPythonXBL3()
+				if err != nil {
+					log.Printf("Custom authentication failed: %v", err)
+					time.Sleep(10 * time.Second)
+					continue
+				}
+
+				// Request the Minecraft chain
+				chain, err := auth.RequestMinecraftChain(context.Background(), xblToken, key)
+				if err != nil {
+					log.Printf("Failed to obtain Minecraft chain: %v", err)
+					time.Sleep(10 * time.Second)
+					continue
+				}
+
+				// Use our wrapper for the token source
+				log.Println("Using custom token source for authentication")
+				dialer.TokenSource = &tokenSourceWrapper{chain: chain}
+
+				// Try dialing again with our custom token source
+				log.Println("Retrying connection with custom authentication...")
+				conn, err = dialer.Dial("raknet", serverAddr)
+				if err != nil {
+					logMinecraftErrorDiagnostics(err)
+					time.Sleep(10 * time.Second)
+					continue
+				}
+			} else {
+				// Not in online mode, just wait and retry
+				time.Sleep(10 * time.Second)
+				continue
+			}
+		}
+
+		log.Printf("Successfully connected to Minecraft server at %s", serverAddr)
+		minecraftConn = conn
+
+		// Handle incoming Minecraft packets
+		go handleMinecraftConnection(conn)
 	}
+}
 
-	dialer := minecraft.Dialer{
-		ClientData: login.ClientData{
-			GameVersion: GetGameVersion(),
-			DeviceOS:    protocol.DeviceAndroid,
-			DeviceID:    uuid.NewString(), // Generate a unique device ID
-		},
-		Protocol: minecraft.DefaultProtocol,
-		IdentityData: login.IdentityData{
-			Identity: minecraftChain,
-			XUID:     "", // Will be filled by server
-		},
-	}
+// tokenSourceWrapper wraps a Minecraft chain string to implement oauth2.TokenSource
+type tokenSourceWrapper struct {
+	chain string
+}
 
-	// Store the private key for future use if needed
-	_ = privateKey
-
-	// Set PacketFunc for extra diagnostics
-	dialer.PacketFunc = func(header packet.Header, data []byte, src, dst net.Addr) {
-		log.Printf("Received packet: Header=%+v, DataLength=%d, Src=%v, Dst=%v", header, len(data), src, dst)
-	}
-
-	conn, err := dialer.Dial("raknet", serverAddr)
-	if err != nil {
-		log.Printf("Error connecting to Minecraft: %v", err)
-		logMinecraftErrorDiagnostics(err)
-		log.Println("Will retry connection in 10 seconds...")
-
-		// Try to reconnect after a delay
-		time.Sleep(10 * time.Second)
-		connectMinecraft()
-		return
-	}
-
-	minecraftConn = conn
-	log.Println("Connected to Minecraft server successfully!")
-
-	// Handle incoming Minecraft packets
-	go handleMinecraftConnection(conn)
+// Token implements the oauth2.TokenSource interface
+func (t *tokenSourceWrapper) Token() (*oauth2.Token, error) {
+	// Create a token with the chain in the AccessToken field
+	// This ensures the chain is properly passed to gophertunnel
+	return &oauth2.Token{
+		AccessToken: t.chain,
+		TokenType:   "Bearer",
+		// Set a far future expiry time since Minecraft chains don't expire quickly
+		Expiry: time.Now().Add(24 * time.Hour),
+	}, nil
 }
 
 // logMinecraftErrorDiagnostics provides detailed diagnostic information for Minecraft connection errors
@@ -265,5 +319,28 @@ func sendChatToMinecraft(message string, target string) {
 	err := minecraftConn.WritePacket(textPacket)
 	if err != nil {
 		log.Printf("Error sending chat message to Minecraft: %v", err)
+	}
+}
+
+// getClientData returns a ClientData struct configured for connecting to Minecraft
+func getClientData() login.ClientData {
+	return login.ClientData{
+		GameVersion:      GetGameVersion(),
+		DeviceOS:         protocol.DeviceAndroid,
+		DeviceID:         config.Player.DeviceID,
+		DefaultInputMode: 2, // Touch input mode (2)
+		CurrentInputMode: 2, // Touch input mode (2)
+		UIProfile:        0, // Classic UI (0)
+		GUIScale:         0, // Default GUI scale
+		LanguageCode:     "en_US",
+	}
+}
+
+// getIdentityData returns a basic IdentityData struct, which will be populated during authentication
+func getIdentityData() login.IdentityData {
+	return login.IdentityData{
+		DisplayName: config.Player.DisplayName,
+		Identity:    "", // Will be filled during authentication
+		XUID:        "", // Will be filled during authentication
 	}
 }
